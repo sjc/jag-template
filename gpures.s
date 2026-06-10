@@ -145,9 +145,7 @@ _GPU_blit::
     ; restore return address and return
 
     load    (sp),lr
-    ;addqt   #4,sp
     jump    (lr)
-    ;nop
     addqt   #4,sp
 
     .equrundef      bcmd
