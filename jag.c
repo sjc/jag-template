@@ -118,16 +118,22 @@ void SetPallete(void) {
   //
   // Set the palette, which is saved after the image data in an
   //  image converted with `tga2cry -f cry8`
-  // The first word after the image data is the number of colors
-  //  in the palette
   //
 
   unsigned short *add = (unsigned short *)0xf00400;
   unsigned short *pal = (unsigned short *)&image[64000/4];
+
+  // The first word after the image data is the number of colors
+  //  in the palette
   short count = *pal++;
 
   while (count--) {
-    *add++ = *pal++;
+    // REALLY set that palette value, because if the RELEASE bit is
+    //  set on any BITMAP object in the current OP list, writing into
+    //  the CLUT can fail
+    do { *add = *pal; } while (*add != *pal);
+    add++;
+    pal++;
   }
 }
 

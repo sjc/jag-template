@@ -50,6 +50,14 @@ A minimally modified version of Atari's example start-up code. It:
 
 It then `stop`s the 68k, looping and stopping it again when it's woken by the vblank interrupt.
 
+### init_olist.c
+
+Builds the initial Object Processor List, minus the initial `BRANCH` objects, which are built in `startup.s`. This allows you to take a more declarative approach to defining the object list (or object lists). It is expected that you will update this file to your needs. The example code creates a single 8-bit 320x200 pixel `BITMAP` item (and a final `STOP`).
+
+The `OLPset()` macros sets, via the `OList` global, which object list will be shown after the next vertical blank. Code in the vblank handler (re-)copies the current object list into the master list stored in `OLPstore`.
+
+Ensure that `OLPset()` has been called with a valid object list before returning.
+
 ### gpures.s
 
 This code is loaded into GPU RAM and is made up of two parts. The first are a series of utility routines. The second is one-time setup code, starting at `GPU_init`. This:
@@ -82,5 +90,4 @@ Contains register aliases for use with VBCC's C-calling ABI, to assist with writ
 * Experiment with different optimisation levels for the generated C code
 * Provide an example of a "manifest" file listing resources in ROM which can be accessed by the RAM code
 * Fix the warning in the Makefile / replace the existing C-to-JRISC recipe properly
-* Include olist.c from other example code and provide a more readable way of building the OP list
 * Support for advanced maths functions, using the maths libraries included with VBCC

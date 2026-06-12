@@ -6,9 +6,6 @@
 ; Begin STARTUP PICTURE CONFIGURATION -- Edit this to change startup picture
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-PPP     	.equ    8      			; Pixels per Phrase (1-bit)
-BMP_WIDTH   	.equ    320      		; Width in Pixels
-BMP_HEIGHT  	.equ    200    			; Height in Pixels
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; End of STARTUP PICTURE CONFIGURATION
@@ -32,14 +29,10 @@ BMP_HEIGHT  	.equ    200    			; Height in Pixels
 		.extern _VID_hde
         
         .extern _vidmem
-        .extern listbuf
-        .extern bmpupdate
+        .extern _OLPstore
+        .extern _OList
+        .extern _InitObjectList
 
-
-BMP_PHRASES 	.equ    (BMP_WIDTH/PPP) 	; Width in Phrases
-BMP_LINES   	.equ    (BMP_HEIGHT*2)  	; Height in Half Scanlines
-BITMAP_OFF  	.equ    (2*8)       		; Two Phrases
-LISTSIZE    	.equ    5       		; List length (in phrases)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Program Entry Point Follows...
 
@@ -54,11 +47,6 @@ LISTSIZE    	.equ    5       		; List length (in phrases)
 		jsr 	InitVideo      		; Setup our video registers.
 		jsr 	InitLister     		; Initialize Object Display List
 		jsr 	InitVBint      		; Initialize our VBLANK routine
-
-;;; Sneaky trick to cause display to popup at first VB
-
-		move.l	#$0,listbuf+BITMAP_OFF
-		move.l	#$C,listbuf+BITMAP_OFF+4
 
 		;
 		; load resident code into the GPU
@@ -82,7 +70,10 @@ LISTSIZE    	.equ    5       		; List length (in phrases)
 		.extern _GPU_store
 		.extern GPU_init
 
+		move.l 	#_OLPstore+16,d0
+		swap  	d0
 		move.l 	d0,_GPU_store  		; D0 is swapped OLP from InitLister
+
 		move.l 	#GPU_init,G_PC
 		
 .start_gpu:
@@ -198,105 +189,63 @@ calc_vals:
 		movem.l (sp)+,d0-d6
 		rts
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; InitLister: Initialize Object List Processor List
-;
-;    Returns: Pre-word-swapped address of current object list in d0.l
-;
-;  Registers: d0.l/d1.l - Phrase being built
-;             d2.l/d3.l - Link address overlays
-;             d4.l      - Work register
-;             a0.l      - Roving object list pointer
-		
+
 InitLister:
-		movem.l d1-d4/a0,-(sp)		; Save registers
-			
-		lea     listbuf,a0
-		move.l  a0,d2           	; Copy
+	movem.l	d0-d7/a0-a6,-(sp)
+;
+; make some branch and stop objects to work around an object processor bug
+; for the branch objects:
+; [-------unused-------][--------link--------] [unused] cc[---ypos---]type
+; xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx
+;
+;link is the address of the stop object / 8
+;cc is 2 for branch0, 1 for branch1
+;type is 3 for both branch objects
+;ypos is vde for branch0, vdb for branch1
+;
+	lea	_OLPstore,a0
+	move.l	a0,d0  			; address of STOP object
+	lsr.l	#3,d0			; convert address to phrase
+	move.l	d0,d3			; we'll need this link address twice
 
-		add.l   #(LISTSIZE-1)*8,d2  	; Address of STOP object
-		move.l	d2,d3			; Copy for low half
+	move.l	#0,(a0)+
+	move.l	#4,(a0)+		; stop object
+	move.l	#0,(a0)+		;
+	move.l	#4,(a0)+		; another one, never used, for quad alignment
+					; a0 is now _OLPstore+16
+;
+; a0 now points at branch0
+;
+	moveq.l	#0,d1
+	moveq.l	#0,d2
+	move.w	_VID_vde,d1
+	move.w	_VID_vdb,d2
 
-		lsr.l	#8,d2			; Shift high half into place
-		lsr.l	#3,d2
-		
-		swap	d3			; Place low half correctly
-		clr.w	d3
-		lsl.l	#5,d3
+	lsr.l	#8,d0					;lowest 8 bits go in next long, so remove them
+	move.l	d0,(a0)					;set high bytes of link pointer
+	lsl.l	#3,d1					;shift vde left 3 to make room for object type
+	or.w	#$8003,d1				;set cc to 2, type to 3
+	lsl.l	#8,d3					;shift past 8 unused bits
+	swap	d3					;move low 8 bits of link pointer and unused 8 bits to high word
+	move.w	d1,d3					;combine cc, ypos, type with low 8 bits of link pointer and unused 8 bits
+	move.l	d3,4(a0)				;save 2nd long in the phrase
+	move.l	(a0),8(a0)				;high bytes of link pointer are the same as branch0
+	lsl.l	#3,d2					;shift vdb left 3 to make room for object type
+	or.w	#$4003,d2				;set cc to 1, type to 3
+	move.w	d2,d3					;combine cc, ypos, type with low 8 bits of link pointer and unused 8 bits
+	move.l	d3,12(a0)				;save 2nd long in the phrase
+;
+; finally, add another stop object (for now)
+;
+	lea	16(a0),a0		; a0 is now _OLPstore+32
+	move.l	#0,(a0)
+	move.l	#4,4(a0)
+	;move.l	a0,_OList
 
-; Write first BRANCH object (branch if YPOS > a_vde )
+	jsr _InitObjectList 	; this must set _OList to point to a valid list
 
-		clr.l   d0
-		move.l  #(BRANCHOBJ|O_BRLT),d1  ; $4000 = VC < YPOS
-		or.l	d2,d0			; Do LINK overlay
-		or.l	d3,d1
-								
-		move.w  _VID_vde,d4                ; for YPOS
-		lsl.w   #3,d4                   ; Make it bits 13-3
-		or.w    d4,d1
-
-		move.l	d0,(a0)+
-		move.l	d1,(a0)+
-
-; Write second branch object (branch if YPOS < a_vdb)
-; Note: LINK address is the same so preserve it
-
-		andi.l  #$FF000007,d1           ; Mask off CC and YPOS
-		ori.l   #O_BRGT,d1      	; $8000 = VC > YPOS
-		move.w  _VID_vdb,d4                ; for YPOS
-		lsl.w   #3,d4                   ; Make it bits 13-3
-		or.w    d4,d1
-
-		move.l	d0,(a0)+
-		move.l	d1,(a0)+
-
-; Write a standard BITMAP object
-		move.l	d2,d0
-		move.l	d3,d1
-
-		ori.l  #BMP_HEIGHT<<14,d1       ; Height of image
-
-		move.w  _VID_height,d4           	; Center bitmap vertically
-		sub.w   #BMP_HEIGHT,d4
-		add.w   _VID_vdb,d4
-		andi.w  #$FFFE,d4               ; Must be even
-		lsl.w   #3,d4
-		or.w    d4,d1                   ; Stuff YPOS in low phrase
-
-		move.l	#_vidmem,d4
-		lsl.l	#8,d4
-		or.l	d4,d0
-
-		move.l	d0,(a0)+
-		move.l	d1,(a0)+
-		movem.l	d0-d1,bmpupdate
-
-; Second Phrase of Bitmap
-		move.l	#BMP_PHRASES>>4,d0	; Only part of top LONG is IWIDTH
-		move.l  #O_DEPTH8|O_NOGAP,d1   ; Bit Depth = 16-bit, Contiguous data
-
-		move.w  _VID_width,d4            	; Get width in clocks
-		lsr.w   #2,d4               	; /4 Pixel Divisor
-		sub.w   #BMP_WIDTH,d4
-		lsr.w   #1,d4
-		or.w    d4,d1
-
-		ori.l	#(BMP_PHRASES<<18)|(BMP_PHRASES<<28),d1	; DWIDTH|IWIDTH
-
-		move.l	d0,(a0)+
-		move.l	d1,(a0)+
-
-; Write a STOP object at end of list
-		clr.l   (a0)+
-		move.l  #(STOPOBJ|O_STOPINTS),(a0)+
-
-; Now return swapped list pointer in D0
-
-		move.l  #listbuf,d0
-		swap    d0
-
-		movem.l (sp)+,d1-d4/a0
-		rts
+	movem.l	(sp)+,d0-d7/a0-a6
+	rts
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Procedure: VBI
@@ -304,19 +253,26 @@ InitLister:
 ;        destroyed by the object processor.
 
 VBI:
-		move.l  a0,-(sp)
+		movem.l  d0/a0-a1,-(sp)
 
-		move.l  #listbuf+BITMAP_OFF,a0
+	; copy the current object list into the OLPStore, after the
+	;	initial BRANCH objects
 
-		move.l  bmpupdate,(a0)      	; Phrase = d1.l/d0.l
-		move.l  bmpupdate+4,4(a0)
+	move.l	_OList,a0
+	lea		_OLPstore+32,a1	; first 4 phrases are reserved for stop and branch objects
+.copy_olist:
+	move.l	(a0)+,(a1)+		; copy first long of phrase
+	move.l	(a0)+,d0
+	move.l	d0,(a1)+
+	cmpi.l	#4,d0			; see if we have reached the stop object
+	bne.b	.copy_olist
 
 		add.l 	#1,_GPU_vblank_ticks 	; Increment ticks semaphore
 
 		move.w  #$101,INT1      	; Signal we're done
 		move.w  #$0,INT2
 
-		move.l  (sp)+,a0
+		movem.l  (sp)+,d0/a0-a1
 		rte
 VBI_end:
 

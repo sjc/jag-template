@@ -12,7 +12,7 @@ BJL_ROOT = ../new_bjl/bin
 #
 # The ROM-based setup and load code
 #
-LOADOBJS = shared_storage.o startup.o gpures.o
+LOADOBJS = shared_storage.o startup.o init_olist.o olist.o gpures.o
 
 #
 # The main code which is copied to and run from RAM
